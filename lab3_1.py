@@ -11,7 +11,7 @@ class CCircle:
         
         self.x = x                      
         self.y = y                     
-        self.is_selected = False        # выделен ли круг (False - нет, True - да)
+        self.is_selected = False        
         
     def draw(self, canvas, canvas_id=None):
         
@@ -47,13 +47,20 @@ class CCircle:
     
     def set_selected(self, selected):
         self.is_selected = selected
+    
+    def intersects(self, other_circle):
+        # Проверяет, пересекается ли текущий круг с другим кругом
+        dx = self.x - other_circle.x
+        dy = self.y - other_circle.y
+        distance = (dx*dx + dy*dy) ** 0.5
+        return distance <= (self.RADIUS + other_circle.RADIUS)
 
 
 # Класс контейнер
 class CircleContainer:
     
     def __init__(self):
-        self._circles = []          # список для хранения кругов (приватный)
+        self._circles = []          
     
     def add(self, circle):
         # Добавляет круг в контейнер
@@ -97,6 +104,9 @@ class CirclesApp:
         # Флаг нажатой клавиши Ctrl
         self.ctrl_pressed = False
         
+        # Режим выделения пересекающихся групп
+        self.intersect_select_mode = False
+        
         # Создаём элементы интерфейса
         self.setup_ui()
         
@@ -127,10 +137,19 @@ class CirclesApp:
         self.clear_all_btn = tk.Button(btn_frame, text="Очистить всё", command=self.clear_all)
         self.clear_all_btn.pack(side=tk.LEFT, padx=5)
         
+        # Кнопка для выделения пересекающихся объектов
+        self.select_intersecting_btn = tk.Button(
+            btn_frame, 
+            text="Выделить пересекающиеся круги", 
+            command=self.toggle_intersect_mode,
+            
+        )
+        self.select_intersecting_btn.pack(side=tk.LEFT, padx=5)
+        
         # Статусная строка внизу
         self.status_label = tk.Label(
             self.root,
-            text="Кругов: 0 | Выделено: 0",
+            text="Кругов: 0 | Выделено: 0 | Режим: обычный",
             bg="#e0e0e0",
             relief=tk.SUNKEN,
             anchor=tk.W
@@ -160,6 +179,59 @@ class CirclesApp:
         # Устанавливаем фокус на canvas для обработки клавиш
         self.canvas.focus_set()
     
+    def toggle_intersect_mode(self):
+        #Включает/выключает режим выделения пересекающихся кругов
+        self.intersect_select_mode = not self.intersect_select_mode
+        
+        if self.intersect_select_mode:
+            self.select_intersecting_btn.config(bg="#B7B5B5")  
+            self.status_label.config(text=f"Кругов: {self.container.get_count()} | Выделено: {sum(1 for c in self.container.get_all() if c.is_selected)} | Режим: выделение пересекающихся кругов")
+        else:
+            self.select_intersecting_btn.config(bg="#FEFFFE")  
+            self.status_label.config(text=f"Кругов: {self.container.get_count()} | Выделено: {sum(1 for c in self.container.get_all() if c.is_selected)} | Режим: обычный")
+    
+    def find_connected_group(self, start_circle):
+       
+        if not start_circle:
+            return set()
+        
+        visited = set()
+        stack = [start_circle]
+        
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            
+            visited.add(current)
+            
+            # Ищем все круги, которые пересекаются с текущим
+            for circle in self.container.get_all():
+                if circle not in visited and current.intersects(circle):
+                    stack.append(circle)
+        
+        return visited
+    
+    def select_intersecting_group(self, clicked_circle):
+        
+        if not clicked_circle:
+            return
+        
+        # Находим все круги в группе пересечений
+        group = self.find_connected_group(clicked_circle)
+        
+        # Снимаем выделение со всех кругов
+        for circle in self.container.get_all():
+            circle.set_selected(False)
+        
+        # Выделяем найденную группу
+        for circle in group:
+            circle.set_selected(True)
+        
+        # Обновляем отображение и статус
+        self.update_canvas()
+        self.update_status()
+    
     def on_mouse_click(self, event):
         
         x, y = event.x, event.y
@@ -170,19 +242,32 @@ class CirclesApp:
             if circle.contains_point(x, y):
                 hit_circles.append(circle)
         
-        # Если кликнули на круг(и)
-        if hit_circles:
-            if self.ctrl_pressed:
-                # Ctrl нажат: инвертируем выделение (добавляем/убираем)
+        # Если нажат Ctrl - всегда используем стандартное поведение (добавление/удаление из выделения)
+        if self.ctrl_pressed:
+            if hit_circles:
+                # Инвертируем выделение для кликнутого круга
                 circle = hit_circles[0]
                 circle.set_selected(not circle.is_selected)
-            else:
-                # Ctrl не нажат: выделяем только первый круг, остальные снимаем
-                for circle in self.container.get_all():
-                    if circle in hit_circles:
-                        circle.set_selected(circle == hit_circles[0])
-                    else:
-                        circle.set_selected(False)
+                # Обновляем отображение и статус
+                self.update_canvas()
+                self.update_status()
+            return
+        
+        # Если включен режим выделения пересекающихся кругов (и Ctrl не нажат)
+        if self.intersect_select_mode and hit_circles:
+            # Выделяем всю группу пересекающихся кругов
+            self.select_intersecting_group(hit_circles[0])
+            return
+        
+        # Обычный режим выделения (без Ctrl и без режима пересечений)
+        # Если кликнули на круг(и)
+        if hit_circles:
+            # Выделяем только первый круг, остальные снимаем
+            for circle in self.container.get_all():
+                if circle in hit_circles:
+                    circle.set_selected(circle == hit_circles[0])
+                else:
+                    circle.set_selected(False)
         else:
             # Кликнули на пустое место - снимаем выделение со всех
             for circle in self.container.get_all():
@@ -280,12 +365,18 @@ class CirclesApp:
                 
                 self.canvas.itemconfig(circle_id, fill=fill_color, outline=outline_color, width=width)
     
-    # Обнвление статусной строки
+    # Обновление статусной строки
     def update_status(self):
         
         count = self.container.get_count()
         selected = sum(1 for c in self.container.get_all() if c.is_selected)
-        self.status_label.config(text=f"Кругов: {count} | Выделено: {selected}")
+        
+        if self.intersect_select_mode:
+            mode_text = "Режим: выделение пересекающихся кругов"
+        else:
+            mode_text = "Режим: обычный"
+        
+        self.status_label.config(text=f"Кругов: {count} | Выделено: {selected} | {mode_text}")
     
     def run(self):
         self.root.mainloop()
